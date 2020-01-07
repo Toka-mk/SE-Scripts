@@ -39,6 +39,8 @@ namespace IngameScript
 		IMyProgrammableBlock autoDoor;
 		IMyAirVent vent;
 		bool o2;
+		DateTime landTime = DateTime.MinValue;
+		IMyProgrammableBlock flight;
 
 		MyPlanetElevation elevation;
 
@@ -65,7 +67,9 @@ namespace IngameScript
 				{"gearDown", true},
 				{"locked", true},
 				{"aligned", true},
-				{"aligner", true}
+				{"aligner", true},
+				{"landed", true},
+				{"thruster", true}
 			};
 
 			_commands["startup"] = Startup;
@@ -78,6 +82,8 @@ namespace IngameScript
 
 			autoDoor = GridTerminalSystem.GetBlockWithName("[Chroma] Auto Door Program") as IMyProgrammableBlock;
 			vent = GridTerminalSystem.GetBlockWithName("[Chroma] Air Vent Exterior") as IMyAirVent;
+
+			flight = GridTerminalSystem.GetBlockWithName("[Chroma] Flight Mode Program") as IMyProgrammableBlock;
 
 			o2 = vent.GetOxygenLevel() < .6;
 
@@ -107,7 +113,7 @@ namespace IngameScript
 			int alt = GetAltitude();
 			bool grav = CheckGrav();
 
-			CheckTask(alt, grav);
+			CheckLand(alt, grav);
 			CheckAlign(alt, grav);
 			CheckAir();
 		}
@@ -120,7 +126,6 @@ namespace IngameScript
 		void CheckAir()
 		{
 			bool safe = vent.GetOxygenLevel() > 0.6;
-			//message = vent.GetOxygenLevel().ToString();
 
 			if (o2 == safe) return;
 
@@ -186,7 +191,7 @@ namespace IngameScript
 			}
 		}
 
-		void CheckTask(int alt, bool grav)
+		void CheckLand(int alt, bool grav)
 		{
 			if (grav)
 			{
@@ -199,14 +204,6 @@ namespace IngameScript
 				if (alt < 15)
 				{
 					if (!status["locked"]) LockGear(true);
-					foreach (IMyLandingGear gear in landingGears)
-					{
-						if (gear.IsLocked)
-						{
-							stairRotor.Torque = 0;
-							return;
-						}
-					}
 				}
 				else if (status["locked"]) LockGear(false);
 			}
@@ -216,7 +213,33 @@ namespace IngameScript
 				if (status["gearDown"]) GearDown(false);
 			}
 
-			stairRotor.Torque = 30000000;
+			if (landTime == DateTime.MinValue)
+			{
+				foreach (IMyLandingGear gear in landingGears)
+				{
+					if (gear.IsLocked)
+					{
+						landTime = DateTime.Now;
+						stairRotor.Torque = 0;
+						return;
+					}
+				}
+				if (stairRotor.Torque != 300000000) stairRotor.Torque = 300000000;
+				if (!status["thruster"])
+				{
+					flight.TryRun("all_on");
+					status["thruster"] = true;
+				}
+			}
+			else
+			{
+				if ((DateTime.Now - landTime).TotalSeconds > 5)
+				{
+					flight.TryRun("all_off");
+					landTime = DateTime.MinValue;
+					status["thruster"] = false;
+				}
+			}
 		}
 
 		void GearDown(bool down)

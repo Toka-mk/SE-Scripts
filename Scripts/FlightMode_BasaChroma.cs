@@ -98,17 +98,17 @@ namespace IngameScript
 
 		public void Main(string arg, UpdateType updateSource)
 		{
-			arg = arg.ToLower();
+			string[] args = arg.ToLower().Split('_');
 			bool on;
 
-			if (status.TryGetValue(arg, out on))
+			if (status.TryGetValue(args[0], out on))
 			{
 				UpdateBlocks();
-				on = !on;
-				status[arg] = on;
-				SetThrust(thrusters[arg], on);
+				on = (args.Length == 2) ? (args[1] == "on" ? true : false) : !on;
+				status[args[0]] = on;
+				SetThrust(thrusters[args[0]], on);
 				SetMode();
-				Echo(arg.First().ToString().ToUpper() + arg.Substring(1) + ((arg == "grav" || arg == "cruise" ? !on : on) ? "On" : "Off") + "\n");
+				Echo(args[0].First().ToString().ToUpper() + args[0].Substring(1) + ((args[0] == "grav" || args[0] == "cruise" ? !on : on) ? "On" : "Off") + "\n");
 			}
 			else Echo("Invalid Command\n");
 
@@ -129,7 +129,7 @@ namespace IngameScript
 
 
 			Echo(statusstring);
-			
+
 			//Echo(Storage);
 
 			foreach (IMyTextSurface LCD in LCDs) LCD.WriteText(message);

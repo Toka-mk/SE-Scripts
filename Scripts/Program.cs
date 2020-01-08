@@ -61,7 +61,8 @@ namespace IngameScript
 				{"deployed", false},
 				{"down", false},
 				{"retracting", false},
-				{"lowering", false}
+				{"drilling", false},
+				{"pause", false}
 			};
 
 			_commands["mode"] = Transform;
@@ -115,37 +116,84 @@ namespace IngameScript
 			Echo(message);
 		}
 
-		void Ready()
+		void Drilling()
 		{
-			Retract();
-			foreach (IMyPistonBase piston in pistons)
+			if (stage < 1) return;
+
+			if (status["pause"])
 			{
-				piston.SetValue<bool>("ShareInertiaTensor", true);
+				if (status["down"])
+				{
+					
+				}
+				else
+				{
+					drillProg.Enabled = true;
+					drillProg.TryRun("start");
+				}
+				status["pause"] = false;
 			}
-			transformRotor.RotorLock = true;
-			transformRotor.SetValue<bool>("ShareInertiaTensor", true);
-			drillRotor.RotorLock = true;
-			drillRotor.SetValue<bool>("ShareInertiaTensor", true);
+			else if (status["deploy"])
+
+			stage = Math.Abs(stage);
+
+			if (stage == 10)
+			{
+				drillProg.Enabled = true;
+				drillProg.TryRun("start");
+			}
+			else if (stage == 1)
+			{
+				if (status["deployed"])
+				{
+					status["retracting"] = true;
+					return;
+				}
+				transformRotor.RotorLock = false;
+				transformRotor.LowerLimitRad = 20;
+				transformRotor.TargetVelocityRad = -2; 
+			}
 		}
 
-		bool Retract()
+		void Retract()
 		{
-			drillProg.Enabled = false;
-			foreach (IMyPistonBase piston in pistons)
+			if (!status["retracting"]) return;
+
+			if (status["deployed"])
 			{
-				piston.MaxLimit = 10;
-				piston.MinLimit = 0;
-				piston.Velocity = -1;
+				drillProg.Enabled = false;
+				foreach (IMyPistonBase piston in pistons)
+				{
+					piston.Enabled = true;
+					piston.MaxLimit = 10;
+					piston.MinLimit = 0;
+					piston.Velocity = -1;
+					piston.SetValue<bool>("ShareInertiaTensor", true);
+				}
+				piston2.SetValue<bool>("ShareInertiaTensor", false);
+				foreach (IMyShipDrill drill in drills) drill.Enabled = false;
+				transformRotor.RotorLock = false;
+				transformRotor.TargetVelocityRPM = 2;
+				if (!status["down"])
+				{
+					drillRotor.RotorLock = false;
+					drillRotor.TargetVelocityRPM = 2;
+				}
+
+				status["deployed"] = false;
+				status["retracting"] = true;
+
+				return;
 			}
-			transformRotor.RotorLock = false;
-			transformRotor.TargetVelocityRPM = 2;
-			if (!status["down"])
+			else if (rotorMoving(transformRotor, true) || rotorMoving(drillRotor, true))
 			{
-				drillRotor.RotorLock = false;
-				drillRotor.TargetVelocityRPM = 2;
+				return;
 			}
 
-			return true;
+			transformRotor.RotorLock = true;
+			drillRotor.RotorLock = true;
+			status["retracting"] = false;
+			return;
 		}
 
 		void Transform()

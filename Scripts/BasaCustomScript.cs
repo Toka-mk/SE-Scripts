@@ -38,7 +38,9 @@ namespace IngameScript
 		List<IMyDoor> doors = new List<IMyDoor>();
 		IMyProgrammableBlock autoDoor;
 		IMyAirVent vent;
-		bool o2;
+		bool breathable;
+		IMyProgrammableBlock flight;
+		IMyParachute para;
 
 		MyPlanetElevation elevation;
 
@@ -64,8 +66,10 @@ namespace IngameScript
 			{
 				{"gearDown", true},
 				{"locked", true},
-				{"aligned", true},
-				{"aligner", true}
+				{"aligner", true},
+				{"thruster", true},
+				{"atmothrust", false},
+				{"landed", false}
 			};
 
 			_commands["startup"] = Startup;
@@ -79,7 +83,11 @@ namespace IngameScript
 			autoDoor = GridTerminalSystem.GetBlockWithName("[Chroma] Auto Door Program") as IMyProgrammableBlock;
 			vent = GridTerminalSystem.GetBlockWithName("[Chroma] Air Vent Exterior") as IMyAirVent;
 
-			o2 = vent.GetOxygenLevel() < .6;
+			flight = GridTerminalSystem.GetBlockWithName("[Chroma] Flight Mode Program") as IMyProgrammableBlock;
+
+			breathable = vent.GetOxygenLevel() < .6;
+			
+			message = "";
 
 			UpdateBlocks();
 		}
@@ -102,27 +110,54 @@ namespace IngameScript
 				return;
 			}
 
+			/*
+			message = "1. Landing Gear\n" +
+						"2. Cruise Mode\n" +
+						"3. All Thrust\n" +
+						"4. Align\n" +
+						"1. Grav Mode\n" +
+						"2. Aux Thrust\n" +
+						"3. Hydro Thrust\n" +
+						"4. Atmo Thrust\n\n";
+
+			foreach (var keyValue in status) message += keyValue.Key + keyValue.Value + "\n";
+			*/
+
 			Echo(message);
 
 			int alt = GetAltitude();
 			bool grav = CheckGrav();
+			float o2 = vent.GetOxygenLevel();
+			float atmo = para.Atmosphere;
 
-			CheckTask(alt, grav);
-			CheckAlign(alt, grav);
-			CheckAir();
+			CheckLand(alt, grav);
+			CheckAirlock(o2);
+			CheckThrust(atmo, grav);
 		}
 
 		void Startup()
 		{
 			drillPiston2.SetValue<bool>("ShareInertiaTensor", false);
 		}
-
-		void CheckAir()
+		void CheckThrust(float atmo, bool grav)
 		{
-			bool safe = vent.GetOxygenLevel() > 0.6;
-			//message = vent.GetOxygenLevel().ToString();
+			if (atmo < .3 && status["atmothrust"])
+			{
+				flight.TryRun("atmo_off");
+				status["atmothrust"] = false;
+			}
+			else if (atmo > .3 && !status["atmothrust"])
+			{
+				flight.TryRun("atmo_on");
+				status["atmothrust"] = true;
+			}
+		}
 
-			if (o2 == safe) return;
+		void CheckAirlock(float o2)
+		{
+			bool safe = o2 > 0.6;
+
+			if (safe == breathable) return;
 
 			foreach (IMyDoor door in doors)
 			{
@@ -137,7 +172,7 @@ namespace IngameScript
 			}
 			autoDoor.TryRun("reset");
 
-			o2 = safe;
+			breathable = safe;
 		}
 
 		void Lock()
@@ -147,6 +182,14 @@ namespace IngameScript
 			{
 				bool locked = !status["locked"];
 				LockGear(locked);
+			}
+			
+			if (status["landed"])
+			{
+				flight.TryRun("all_on");
+				if (status["aligner"]) aligner.TryRun("go");
+				if (stairRotor.Torque != 300000000) stairRotor.Torque = 300000000;
+				status["landed"] = false;
 			}
 		}
 
@@ -163,30 +206,7 @@ namespace IngameScript
 			return grav.Length() > 1.5;
 		}
 
-		void CheckAlign(int alt, bool grav)
-		{
-			if (grav)
-			{
-				if (alt > 3000) return;
-				if (!status["aligned"])
-				{
-					aligner.TryRun("go");
-					status["aligned"] = true;
-					status["alinger"] = true;
-				}
-			}
-			else
-			{
-				if (status["aligned"])
-				{
-					aligner.TryRun("stop");
-					status["aligned"] = false;
-					status["aligner"] = false;
-				}
-			}
-		}
-
-		void CheckTask(int alt, bool grav)
+		void CheckLand(int alt, bool grav)
 		{
 			if (grav)
 			{
@@ -199,14 +219,6 @@ namespace IngameScript
 				if (alt < 15)
 				{
 					if (!status["locked"]) LockGear(true);
-					foreach (IMyLandingGear gear in landingGears)
-					{
-						if (gear.IsLocked)
-						{
-							stairRotor.Torque = 0;
-							return;
-						}
-					}
 				}
 				else if (status["locked"]) LockGear(false);
 			}
@@ -215,8 +227,24 @@ namespace IngameScript
 			{
 				if (status["gearDown"]) GearDown(false);
 			}
-			
-			stairRotor.Torque = 30000000;
+
+			if (!status["landed"] && status["locked"])
+			{
+				foreach (IMyLandingGear gear in landingGears)
+				{
+					if (gear.IsLocked)
+					{
+						flight.TryRun("all_off");
+						if (grav)
+						{
+							stairRotor.Torque = 0;
+							if (status["aligner"]) aligner.TryRun("stop");
+						}
+						status["landed"] = true;
+						return;
+					}
+				}
+			}
 		}
 
 		void GearDown(bool down)
@@ -301,6 +329,14 @@ namespace IngameScript
 				doors.Add(door);
 				return false;
 			}
+
+			IMyParachute parachute = block as IMyParachute;
+			if (parachute != null && parachute.CustomName.Contains(config["Ship Tag"]))
+			{
+				para = parachute;
+				return false;
+			}
+			
 
 			return false;
 		}

@@ -104,7 +104,11 @@ namespace IngameScript
 			if (status.TryGetValue(args[0], out on))
 			{
 				UpdateBlocks();
-				on = (args.Length == 2) ? (args[1] == "on" ? true : false) : !on;
+				if (args.Length == 2)
+				{
+					on = (args[0] == "cruise" || args[0] == "grav") ? !(args[1] == "on") : args[1] == "on";
+				}
+				else on = !on;
 				status[args[0]] = on;
 				SetThrust(thrusters[args[0]], on);
 				SetMode();

@@ -26,27 +26,25 @@ namespace IngameScript
 		MyCommandLine _commandLine = new MyCommandLine();
 		Dictionary<string, Action> _commands = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase);
 
-		IMyTimerBlock startupTimer;
-		IMyPistonBase drillPiston2;
+		List<IMyShipDrill> drills = new List<IMyShipDrill>();
+		List<IMyPistonBase> pistons = new List<IMyPistonBase>();
+		IMyPistonBase piston2;
+		IMyMotorStator drillRotor;
+		IMyMotorStator transformRotor;
+		List<IMyCargoContainer> cargos = new List<IMyCargoContainer>();
 
-		IMyShipController controller;
-		IMyMotorStator stairRotor;
-		IMyPistonBase landingPiston;
-		IMyMotorStator landingRotor;
-		List<IMyLandingGear> landingGears = new List<IMyLandingGear>();
-		IMyProgrammableBlock aligner;
-		List<IMyDoor> doors = new List<IMyDoor>();
-		IMyProgrammableBlock autoDoor;
-		IMyAirVent vent;
-		bool breathable;
-		IMyProgrammableBlock flight;
-		IMyParachute para;
+		IMyProgrammableBlock drillProg;
+		IMyCockpit seat;
 
-		MyPlanetElevation elevation;
+		int stage;
+		int upper;
+		int lower;
 
 		Dictionary<string, string> config;
 		Dictionary<string, bool> status;
 		string message;
+
+		float pi = (float)Math.PI;
 
 		public Program()
 		{
@@ -55,41 +53,55 @@ namespace IngameScript
 			config = new Dictionary<string, string>
 			{
 				{"Ship Tag", "[Chroma]"},
-				{"Controller", "Flight Seat"},
-				{"Stair Tag", "Stair"},
-				{"Landing Gear Tag", "Landing Gear"},
-				{"Aligner", "Aligner"},
-				{"Use Surface Elevation", "True"}
+				{"Drill Tag", "Drill"},
+				{"Cargo Upper Limit", "80"},
+				{"Cargo Lower Limit", "40"},
 			};
 
 			status = new Dictionary<string, bool>
 			{
-				{"gearDown", true},
-				{"locked", true},
-				{"aligner", true},
-				{"thruster", true},
-				{"atmothrust", false},
-				{"landed", false}
+				{"deployed", false},
+				{"down", false},
+				{"retracting", false},
+				{"sleep", false},
+				{"pause", false},
+				{"autopause", false}
 			};
 
-			_commands["startup"] = Startup;
-			_commands["lock"] = Lock;
-			_commands["align"] = Align;
-
-			startupTimer = GridTerminalSystem.GetBlockWithName("[Chroma] Startup Timer") as IMyTimerBlock;
-			startupTimer.StartCountdown();
-			drillPiston2 = GridTerminalSystem.GetBlockWithName("[Chroma] Drill Piston 2") as IMyPistonBase;
-
-			autoDoor = GridTerminalSystem.GetBlockWithName("[Chroma] Auto Door Program") as IMyProgrammableBlock;
-			vent = GridTerminalSystem.GetBlockWithName("[Chroma] Air Vent Exterior") as IMyAirVent;
-
-			flight = GridTerminalSystem.GetBlockWithName("[Chroma] Flight Mode Program") as IMyProgrammableBlock;
-
-			breathable = vent.GetOxygenLevel() < .6;
-
-			message = "";
+			_commands["mode"] = Transform;
+			_commands["reset"] = Reset;
+			_commands["deploy"] = Deploy;
+			_commands["start"] = Start;
+			_commands["pause"] = Pause;
 
 			UpdateBlocks();
+
+			string[] savedStatus = Storage.Split('\n');
+			if (savedStatus.Length > 0)
+			{
+				foreach (string line in savedStatus)
+				{
+					string[] words = line.Split('=');
+					if (words.Length != 2) continue;
+					string key = words[0].Trim();
+					bool value = words[1].Trim() == "True" ? true : false;
+					if (status.ContainsKey(key)) status[key] = value;
+					else Int32.TryParse(words[1], out stage);
+				}
+			}
+
+			seat.GetSurface(2).ContentType = ContentType.TEXT_AND_IMAGE;
+		}
+
+		public void Save()
+		{
+			string savedStatus = "";
+			foreach (var keyValue in status)
+			{
+				savedStatus += keyValue.Key + "=" + keyValue.Value + "\n";
+			}
+			savedStatus += "Stage" + "=" + stage;
+			Storage = savedStatus;
 		}
 
 		public void Main(string arg, UpdateType updateSource)
@@ -103,237 +115,372 @@ namespace IngameScript
 				if (_commands.TryGetValue(_commandLine.Argument(0), out commandAction))
 				{
 					commandAction();
-					message = command;
+					message = command + "\n" + message;
 				}
 				else message = $"Unknown command {command}";
-
-				return;
 			}
 
-			/*
-			message = "1. Landing Gear\n" +
-						"2. Cruise Mode\n" +
-						"3. All Thrust\n" +
-						"4. Align\n" +
-						"1. Grav Mode\n" +
-						"2. Aux Thrust\n" +
-						"3. Hydro Thrust\n" +
-						"4. Atmo Thrust\n\n";
+			message = "Drilling Mode:\n" + (status["down"] ? "Downward" : "Forward")
+					+ "\n\nDrill Deployed:\n" + status["deployed"];
 
-			foreach (var keyValue in status) message += keyValue.Key + keyValue.Value + "\n";
-			*/
+			message += "\n\nStage: " + stage + "\n";
+			foreach (var keyValue in status) message += keyValue.Key + ": " + keyValue.Value + "\n";
+
+			CheckCargo();
+			Retract();
+			Drilling();
 
 			Echo(message);
 
-			int alt = GetAltitude();
-			bool grav = CheckGrav();
-			float o2 = vent.GetOxygenLevel();
-			float atmo = para.Atmosphere;
+			IMyTextSurface surface = seat.GetSurface(2);
+			surface.FontColor = status["deployed"] ? Color.DodgerBlue : Color.Yellow;
+			surface.WriteText(message);
 
-			CheckLand(alt, grav);
-			CheckAirlock(o2);
-			CheckThrust(atmo, grav);
 		}
 
-		void Startup()
+		void CheckCargo()
 		{
-			drillPiston2.SetValue<bool>("ShareInertiaTensor", false);
-		}
-		void CheckThrust(float atmo, bool grav)
-		{
-			if (atmo < .3 && status["atmothrust"])
+			if (stage < 1 || stage >19 || upper == 0 || lower == 0) return;
+
+			float current = 0;
+			float max = 0;
+			foreach (IMyCargoContainer cargo in cargos)
 			{
-				flight.TryRun("atmo_off");
-				status["atmothrust"] = false;
+				IMyInventory inv = cargo.GetInventory(0);
+				current += (float)inv.CurrentVolume;
+				max += (float)inv.MaxVolume;
 			}
-			else if (atmo > .3 && !status["atmothrust"])
+			if (max == 0) return;
+
+			float fillRate = current / max;
+
+			message += current + "\n" + max + "\n" + upper + "\n" + lower;
+
+			if (fillRate > upper)
 			{
-				flight.TryRun("atmo_on");
-				status["atmothrust"] = true;
+				status["autopause"] = true;
+				Pause();
+			}
+			else if (fillRate < lower && status["autopause"])
+			{
+				status["autopause"] = false;
+				Start();
 			}
 		}
 
-		void CheckAirlock(float o2)
+		void Transform()
 		{
-			bool safe = o2 > 0.6;
+			status["down"] = !status["down"];
+		}
 
-			if (safe == breathable) return;
+		void Start()
+		{
+			UpdateBlocks();
+			if (status["pause"]) stage = Math.Abs(stage);
+			else stage = status["down"] ? 1 : 20;
+			status["sleep"] = false;
+			status["autopause"] = false;
+		}
 
-			foreach (IMyDoor door in doors)
+		void Deploy()
+		{
+			status["deployed"] = true;
+			piston2.Enabled = true;
+			piston2.MaxLimit = 10;
+			piston2.MinLimit = 0;
+			piston2.Velocity = 2;
+		}
+
+		void Reset()
+		{
+			status["retracting"] = true;
+		}
+
+		void Pause()
+		{
+			status["pause"] = true;
+			status["sleep"] = true;
+			stage = -Math.Abs(stage);
+			if (status["down"])
 			{
-				string name = door.CustomName;
-				door.Enabled = true;
-				if (name.Contains("R")) door.CustomName = "[Chroma] Door R" + (safe ? "" : " Airlock Exterior");
-				else if (name.Contains("L")) door.CustomName = "[Chroma] Door L" + (safe ? "" : " Airlock Exterior");
+				foreach (IMyPistonBase piston in pistons) piston.Enabled = false;
+				foreach (IMyShipDrill drill in drills) drill.Enabled = false;
+				transformRotor.Enabled = false;
+			}
+			else drillProg.TryRun("pause");
+		}
+
+		void Drilling()
+		{
+			if (stage < 1 || status["retracting"] || status["sleep"]) return;
+
+			if (status["pause"])
+			{
+				if (status["down"])
+				{
+					foreach (IMyPistonBase piston in pistons) piston.Enabled = true;
+					foreach (IMyShipDrill drill in drills) drill.Enabled = true;
+					transformRotor.Enabled = true;
+				}
 				else
 				{
-					door.CustomName = "[Chroma] Door" + (safe ? " Excluded" : " Airlock Interior");
+					drillProg.Enabled = true;
+					drillProg.TryRun("start");
 				}
-			}
-			autoDoor.TryRun("reset");
-
-			breathable = safe;
-		}
-
-		void Lock()
-		{
-			if (CheckGrav()) foreach (IMyLandingGear gear in landingGears) gear.Unlock();
-			else
-			{
-				bool locked = !status["locked"];
-				LockGear(locked);
+				status["pause"] = false;
+				status["sleep"] = false;
+				return;
 			}
 
-			if (status["landed"])
+			status["deployed"] = true;
+
+			switch (stage)
 			{
-				flight.TryRun("all_on");
-				if (status["aligner"]) aligner.TryRun("go");
-				if (stairRotor.Torque != 300000000) stairRotor.Torque = 300000000;
-				status["landed"] = false;
-			}
-		}
+				case 1:
+					foreach (IMyShipDrill drill in drills) drill.Enabled = true;
+					transformRotor.RotorLock = false;
+					transformRotor.LowerLimitDeg = 235;
+					transformRotor.TargetVelocityRPM = -1;
+					stage = 2;
+					break;
 
-		void Align()
-		{
-			bool align = !status["aligner"];
-			aligner.TryRun(align ? "go" : "stop");
-			status["aligner"] = align;
-		}
+				case 2:
+					if (rotorMoving(transformRotor, false)) return;
+					stage = 3;
+					break;
 
-		bool CheckGrav()
-		{
-			Vector3D grav = controller.GetNaturalGravity();
-			return grav.Length() > 1.5;
-		}
-
-		void CheckLand(int alt, bool grav)
-		{
-			if (grav)
-			{
-				if (alt < 30)
-				{
-					if (!status["gearDown"]) GearDown(true);
-				}
-				else if (status["gearDown"]) GearDown(false);
-
-				if (alt < 15)
-				{
-					if (!status["locked"]) LockGear(true);
-				}
-				else if (status["locked"]) LockGear(false);
-			}
-
-			else
-			{
-				if (status["gearDown"]) GearDown(false);
-			}
-
-			if (!status["landed"] && status["locked"])
-			{
-				foreach (IMyLandingGear gear in landingGears)
-				{
-					if (gear.IsLocked)
+				case 3:
+					foreach (IMyPistonBase piston in pistons)
 					{
-						flight.TryRun("all_off");
-						if (grav)
-						{
-							stairRotor.Torque = 0;
-							if (status["aligner"]) aligner.TryRun("stop");
-						}
-						status["landed"] = true;
-						return;
+						piston.Enabled = true;
+						piston.MaxLimit = 10;
+						piston.MinLimit = 3;
+						piston.Velocity = .2f;
 					}
-				}
+					stage = 4;
+					break;
+
+				case 4:
+					foreach (IMyPistonBase piston in pistons) if (piston.CurrentPosition != 10) return;
+					stage = 5;
+					break;
+
+				case 5:
+					transformRotor.LowerLimitDeg = 180;
+					transformRotor.TargetVelocityRPM = -.5f;
+					stage = 6;
+					break;
+
+				case 6:
+					if (rotorMoving(transformRotor, false)) return;
+					stage = 7;
+					break;
+
+				case 7:
+					foreach (IMyPistonBase piston in pistons) piston.Velocity = -.15f;
+					stage = 8;
+					break;
+
+				case 8:
+					foreach (IMyPistonBase piston in pistons) if (piston.CurrentPosition != piston.MinLimit) return;
+					stage = 9;
+					break;
+
+				case 9:
+					transformRotor.LowerLimitDeg = 130;
+					stage = 10;
+					break;
+
+				case 10:
+					if (rotorMoving(transformRotor, false)) return;
+					stage = 11;
+					break;
+
+				case 11:
+					foreach (IMyPistonBase piston in pistons)
+					{
+						piston.MinLimit = 0;
+						piston.Velocity = -.2f;
+					}
+					stage = 12;
+					break;
+
+				case 12:
+					foreach (IMyPistonBase piston in pistons) if (piston.CurrentPosition != 0) return;
+					stage = 13;
+					break;
+
+				case 13:
+					transformRotor.UpperLimitDeg = 180;
+					transformRotor.TargetVelocityRPM = .5f;
+					stage = 14;
+					break;
+
+				case 14:
+					if (rotorMoving(transformRotor, true)) return;
+					stage = 15;
+					break;
+
+				case 15:
+					foreach (IMyPistonBase piston in pistons)
+					{
+						piston.MaxLimit = 1.5f;
+						piston.Velocity = .15f;
+					}
+					stage = 16;
+					break;
+
+				case 16:
+					foreach (IMyPistonBase piston in pistons) if (piston.CurrentPosition != piston.MaxLimit) return;
+					Reset();
+					break;
+
+				case 20:
+					drillProg.Enabled = true;
+					drillRotor.RotorLock = false;
+					drillProg.TryRun("set");
+					stage = 21;
+					break;
+
+				case 21:
+					if (!rotorMoving(drillRotor)) stage = 22;
+					else return;
+					break;
+
+				case 22:
+					drillProg.TryRun("start");
+					status["sleep"] = true;
+					break;
 			}
+
 		}
 
-		void GearDown(bool down)
+		void Retract()
 		{
-			stairRotor.TargetVelocityRPM = down ? -10f : 10f;
-			landingRotor.TargetVelocityRPM = down ? 10f : -10f;
-			status["gearDown"] = down;
-		}
+			if (!status["retracting"]) return;
 
-		void LockGear(bool locked)
-		{
-			landingRotor.RotorLock = locked;
-			landingRotor.SetValue<bool>("ShareInertiaTensor", locked);
-			landingPiston.SetValue<bool>("ShareInertiaTensor", locked);
-			foreach (IMyLandingGear gear in landingGears)
+			if (stage != 0) stage = 0;
+
+			if (status["deployed"])
 			{
-				gear.AutoLock = locked;
-				gear.Unlock();
+				drillProg.Enabled = false;
+				foreach (IMyPistonBase piston in pistons)
+				{
+					piston.Enabled = true;
+					piston.MaxLimit = 10;
+					piston.MinLimit = 0;
+					piston.Velocity = -1;
+					piston.SetValue<bool>("ShareInertiaTensor", true);
+				}
+				piston2.SetValue<bool>("ShareInertiaTensor", false);
+				transformRotor.Enabled = true;
+				transformRotor.LowerLimitDeg = 180;
+				transformRotor.UpperLimitDeg = 270;
+				transformRotor.RotorLock = false;
+				transformRotor.TargetVelocityRPM = 2;
+				transformRotor.SetValue<bool>("ShareInertiaTensor", false);
+				if (!status["down"])
+				{
+					drillRotor.Enabled = true;
+					drillRotor.RotorLock = false;
+					drillRotor.TargetVelocityRPM = -3;
+					drillRotor.SetValue<bool>("ShareInertiaTensor", false);
+				}
+
+				status["deployed"] = false;
+				status["retracting"] = true;
+
+				return;
 			}
-			status["locked"] = locked;
+			else if (rotorMoving(transformRotor, true) || rotorMoving(drillRotor))
+			{
+				return;
+			}
+
+			foreach (IMyShipDrill drill in drills) drill.Enabled = false;
+			transformRotor.RotorLock = true;
+			transformRotor.SetValue<bool>("ShareInertiaTensor", true);
+			drillRotor.RotorLock = true;
+			drillRotor.SetValue<bool>("ShareInertiaTensor", true);
+			status["retracting"] = false;
+			return;
 		}
 
-		int GetAltitude()
+		bool rotorMoving(IMyMotorStator rotor, bool upper)
 		{
-			double altitude = double.PositiveInfinity;
-			controller.TryGetPlanetElevation(elevation, out altitude);
-			return (int)altitude;
+			float diff = Math.Abs(NormalizeRad(rotor.Angle - (upper ? rotor.UpperLimitRad : rotor.LowerLimitRad)));
+			return diff > 0.03;
+		}
+
+		bool rotorMoving(IMyMotorStator rotor)
+		{
+			float diff = Math.Abs(NormalizeRad(rotor.Angle - rotor.UpperLimitRad));
+			if (diff < 0.03) return false;
+
+			diff = Math.Abs(NormalizeRad(rotor.Angle - rotor.LowerLimitRad));
+			if (diff < 0.03) return false;
+
+			return true;
+		}
+
+		float NormalizeRad(float rad)
+		{
+			if (rad > pi) rad -= (2 * pi);
+			if (rad < -pi) rad += (2 * pi);
+			return rad;
 		}
 
 		void UpdateBlocks()
 		{
 			GetConfig(Me);
-			landingGears.Clear();
-			doors.Clear();
 
 			GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(null, CollectBlocks);
-			if ((config["Use Surface Elevation"] == "True")) elevation = MyPlanetElevation.Surface;
-			else elevation = MyPlanetElevation.Sealevel;
 		}
 
 		bool CollectBlocks(IMyTerminalBlock block)
 		{
-			IMyShipController control = block as IMyShipController;
-			if (control != null && control.CustomName.Contains(config["Controller"]))
+			IMyShipDrill drill = block as IMyShipDrill;
+			if (drill != null && drill.CustomName.Contains(config["Ship Tag"]))
 			{
-				controller = control;
+				drills.Add(drill);
+				return false;
+			}
+
+			IMyPistonBase piston = block as IMyPistonBase;
+			if (piston != null && piston.CustomName.Contains(config["Ship Tag"] + config["Drill Tag"]))
+			{
+				pistons.Add(piston);
+				if (piston.CustomName.Contains("Piston 2")) piston2 = piston;
 				return false;
 			}
 
 			IMyMotorStator rotor = block as IMyMotorStator;
 			if (rotor != null)
 			{
-				if (rotor.CustomName.Contains(config["Ship Tag"] + config["Stair Tag"])) stairRotor = rotor;
-				else if (rotor.CustomName.Contains(config["Landing Gear Tag"])) landingRotor = rotor;
+				string name = rotor.CustomName;
+				if (!name.Contains(config["Ship Tag"]) || !name.Contains(config["Drill Tag"])) return false;
+				else if (rotor.CustomName.Contains("Transform")) transformRotor = rotor;
+				else drillRotor = rotor;
+			}
+
+			IMyProgrammableBlock prog = block as IMyProgrammableBlock;
+			if (prog != null && prog.CustomName.Contains(config["Ship Tag"] + config["Drill Tag"]))
+			{
+				drillProg = prog;
 				return false;
 			}
 
-			IMyPistonBase piston = block as IMyPistonBase;
-			if (piston != null && piston.CustomName.Contains(config["Ship Tag"] + config["Landing Gear Tag"]))
+			IMyCockpit cockpit = block as IMyCockpit;
+			if (cockpit != null && cockpit.CustomName.Contains(config["Ship Tag"] + config["Drill Tag"]))
 			{
-				landingPiston = piston;
+				seat = cockpit;
 				return false;
 			}
 
-			IMyLandingGear gear = block as IMyLandingGear;
-			if (gear != null && gear.CustomName.Contains(config["Ship Tag"] + config["Landing Gear Tag"]))
+			IMyCargoContainer cargo = block as IMyCargoContainer;
+			if (cargo != null && cargo.CustomName.Contains(config["Ship Tag"] + config["Drill Tag"]))
 			{
-				landingGears.Add(gear);
-				return false;
-			}
-
-			IMyProgrammableBlock align = block as IMyProgrammableBlock;
-			if (align != null && align.CustomName.Contains(config["Ship Tag"] + config["Aligner"]))
-			{
-				aligner = align;
-				return false;
-			}
-
-			IMyDoor door = block as IMyDoor;
-			if (door != null && door.CustomName.Contains(config["Ship Tag"]))
-			{
-				doors.Add(door);
-				return false;
-			}
-
-			IMyParachute parachute = block as IMyParachute;
-			if (parachute != null && parachute.CustomName.Contains(config["Ship Tag"]))
-			{
-				para = parachute;
+				cargos.Add(cargo);
 				return false;
 			}
 
@@ -364,6 +511,8 @@ namespace IngameScript
 				}
 
 				config["Ship Tag"] += " ";
+				Int32.TryParse(config["Cargo Upper Limit"], out upper);
+				Int32.TryParse(config["Cargo Lower Limit"], out lower);
 			}
 			else SetConfig(block);
 		}
@@ -372,3 +521,7 @@ namespace IngameScript
 		//to here
 	}
 }
+
+
+
+

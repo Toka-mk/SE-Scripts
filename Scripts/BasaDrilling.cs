@@ -123,8 +123,8 @@ namespace IngameScript
 			message = "Drilling Mode:\n" + (status["down"] ? "Downward" : "Forward")
 					+ "\n\nDrill Deployed:\n" + status["deployed"];
 
-			//message += "\n\nStage: " + stage + "\n";
-			//foreach (var keyValue in status) message += keyValue.Key + ": " + keyValue.Value + "\n";
+			message += "\n\nStage: " + stage + "\n";
+			foreach (var keyValue in status) message += keyValue.Key + ": " + keyValue.Value + "\n";
 
 			CheckCargo();
 			Retract();
@@ -140,7 +140,7 @@ namespace IngameScript
 
 		void CheckCargo()
 		{
-			if (!status["deployed"] || stage == 1) return;
+			if (!status["deployed"] || stage == 1 || upper == 0f || lower == 0f) return;
 
 			float current = 0;
 			float max = 0;
@@ -161,7 +161,7 @@ namespace IngameScript
 				status["autopause"] = true;
 				Pause();
 			}
-			else if (fillRate < lower && status["autopause"])
+			else if (fillRate <= lower && status["autopause"])
 			{
 				status["autopause"] = false;
 				Start();
@@ -176,7 +176,7 @@ namespace IngameScript
 		void Start()
 		{
 			UpdateBlocks();
-			if (status["pause"]) stage = Math.Abs(stage);
+			if (status["pause"] && stage != 0) stage = Math.Abs(stage);
 			else stage = status["down"] ? 1 : 20;
 			status["sleep"] = false;
 			status["autopause"] = false;

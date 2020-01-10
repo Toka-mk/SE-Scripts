@@ -140,7 +140,7 @@ namespace IngameScript
 
 		void CheckCargo()
 		{
-			if (stage < 1 || stage >19 || upper == 0 || lower == 0) return;
+			if (!status["deployed"] || stage == 1 || upper == 0f || lower == 0f) return;
 
 			float current = 0;
 			float max = 0;
@@ -152,16 +152,16 @@ namespace IngameScript
 			}
 			if (max == 0) return;
 
-			float fillRate = current / max;
+			float fillRate = 100 * current / max;
 
-			message += current + "\n" + max + "\n" + upper + "\n" + lower;
+			//message += current + "\n" + max + "\n" + fillRate + "\n" + upper + "\n" + lower;
 
 			if (fillRate > upper)
 			{
 				status["autopause"] = true;
 				Pause();
 			}
-			else if (fillRate < lower && status["autopause"])
+			else if (fillRate <= lower && status["autopause"])
 			{
 				status["autopause"] = false;
 				Start();
@@ -176,7 +176,7 @@ namespace IngameScript
 		void Start()
 		{
 			UpdateBlocks();
-			if (status["pause"]) stage = Math.Abs(stage);
+			if (status["pause"] && stage != 0) stage = Math.Abs(stage);
 			else stage = status["down"] ? 1 : 20;
 			status["sleep"] = false;
 			status["autopause"] = false;
@@ -184,6 +184,7 @@ namespace IngameScript
 
 		void Deploy()
 		{
+			if (status["deployed"]) Reset();
 			status["deployed"] = true;
 			piston2.Enabled = true;
 			piston2.MaxLimit = 10;

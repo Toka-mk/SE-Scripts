@@ -31,11 +31,14 @@ namespace IngameScript
 		IMyPistonBase piston2;
 		IMyMotorStator drillRotor;
 		IMyMotorStator transformRotor;
+		List<IMyCargoContainer> cargos = new List<IMyCargoContainer>();
 
 		IMyProgrammableBlock drillProg;
 		IMyCockpit seat;
 
 		int stage;
+		int upper;
+		int lower;
 
 		Dictionary<string, string> config;
 		Dictionary<string, bool> status;
@@ -61,7 +64,8 @@ namespace IngameScript
 				{"down", false},
 				{"retracting", false},
 				{"sleep", false},
-				{"pause", false}
+				{"pause", false},
+				{"autopause", false}
 			};
 
 			_commands["mode"] = Transform;
@@ -116,14 +120,15 @@ namespace IngameScript
 				else message = $"Unknown command {command}";
 			}
 
-			Retract();
-			Drilling();
-
-			message = "Stage: " + stage + "\n";
-			foreach (var keyValue in status) message += keyValue.Key + ": " + keyValue.Value + "\n";
-
 			message = "Drilling Mode:\n" + (status["down"] ? "Downward" : "Forward")
 					+ "\n\nDrill Deployed:\n" + status["deployed"];
+
+			//message += "\n\nStage: " + stage + "\n";
+			//foreach (var keyValue in status) message += keyValue.Key + ": " + keyValue.Value + "\n";
+
+			CheckCargo();
+			Retract();
+			Drilling();
 
 			Echo(message);
 
@@ -133,6 +138,36 @@ namespace IngameScript
 
 		}
 
+		void CheckCargo()
+		{
+			if (!status["deployed"] || stage == 1) return;
+
+			float current = 0;
+			float max = 0;
+			foreach (IMyCargoContainer cargo in cargos)
+			{
+				IMyInventory inv = cargo.GetInventory(0);
+				current += (float)inv.CurrentVolume;
+				max += (float)inv.MaxVolume;
+			}
+			if (max == 0) return;
+
+			float fillRate = 100 * current / max;
+
+			//message += current + "\n" + max + "\n" + fillRate + "\n" + upper + "\n" + lower;
+
+			if (fillRate > upper)
+			{
+				status["autopause"] = true;
+				Pause();
+			}
+			else if (fillRate < lower && status["autopause"])
+			{
+				status["autopause"] = false;
+				Start();
+			}
+		}
+
 		void Transform()
 		{
 			status["down"] = !status["down"];
@@ -140,13 +175,16 @@ namespace IngameScript
 
 		void Start()
 		{
+			UpdateBlocks();
 			if (status["pause"]) stage = Math.Abs(stage);
 			else stage = status["down"] ? 1 : 20;
 			status["sleep"] = false;
+			status["autopause"] = false;
 		}
 
 		void Deploy()
 		{
+			if (status["deployed"]) Reset();
 			status["deployed"] = true;
 			piston2.Enabled = true;
 			piston2.MaxLimit = 10;
@@ -287,7 +325,7 @@ namespace IngameScript
 				case 15:
 					foreach (IMyPistonBase piston in pistons)
 					{
-						piston.MaxLimit = 1;
+						piston.MaxLimit = 1.5f;
 						piston.Velocity = .15f;
 					}
 					stage = 16;
@@ -386,12 +424,6 @@ namespace IngameScript
 			return true;
 		}
 
-		float ToRad(float deg)
-		{
-			float rad = deg * pi / 180;
-			return NormalizeRad(rad);
-		}
-
 		float NormalizeRad(float rad)
 		{
 			if (rad > pi) rad -= (2 * pi);
@@ -446,6 +478,14 @@ namespace IngameScript
 				return false;
 			}
 
+			IMyCargoContainer cargo = block as IMyCargoContainer;
+			if (cargo != null && cargo.CustomName.Contains(config["Ship Tag"] + config["Drill Tag"]))
+			{
+				cargos.Add(cargo);
+				return false;
+			}
+
+
 			return false;
 		}
 
@@ -472,6 +512,8 @@ namespace IngameScript
 				}
 
 				config["Ship Tag"] += " ";
+				Int32.TryParse(config["Cargo Upper Limit"], out upper);
+				Int32.TryParse(config["Cargo Lower Limit"], out lower);
 			}
 			else SetConfig(block);
 		}

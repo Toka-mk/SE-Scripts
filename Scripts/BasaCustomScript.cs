@@ -69,12 +69,14 @@ namespace IngameScript
 				{"aligner", true},
 				{"thruster", true},
 				{"atmothrust", false},
-				{"landed", false}
+				{"landed", false},
+				{"landing", true}
 			};
 
 			_commands["startup"] = Startup;
 			_commands["lock"] = Lock;
 			_commands["align"] = Align;
+			_commands["land"] = Landing;
 
 			startupTimer = GridTerminalSystem.GetBlockWithName("[Chroma] Startup Timer") as IMyTimerBlock;
 			startupTimer.StartCountdown();
@@ -86,10 +88,33 @@ namespace IngameScript
 			flight = GridTerminalSystem.GetBlockWithName("[Chroma] Flight Mode Program") as IMyProgrammableBlock;
 
 			breathable = vent.GetOxygenLevel() < .6;
-			
+
 			message = "";
 
 			UpdateBlocks();
+
+			string[] savedStatus = Storage.Split('\n');
+			if (savedStatus.Length > 0)
+			{
+				foreach (string line in savedStatus)
+				{
+					string[] words = line.Split('=');
+					if (words.Length != 2) continue;
+					string key = words[0].Trim();
+					bool value = words[1].Trim() == "True" ? true : false;
+					if (status.ContainsKey(key)) status[key] = value;
+				}
+			}
+		}
+
+		public void Save()
+		{
+			string savedStatus = "";
+			foreach (var keyValue in status)
+			{
+				savedStatus += keyValue.Key + "=" + keyValue.Value + "\n";
+			}
+			Storage = savedStatus;
 		}
 
 		public void Main(string arg, UpdateType updateSource)
@@ -177,20 +202,27 @@ namespace IngameScript
 
 		void Lock()
 		{
-			if (CheckGrav()) foreach (IMyLandingGear gear in landingGears) gear.Unlock();
-			else
+			if (!CheckGrav() || !status["landing"])
 			{
 				bool locked = !status["locked"];
 				LockGear(locked);
 			}
-			
+
 			if (status["landed"])
 			{
 				flight.TryRun("all_on");
 				if (status["aligner"]) aligner.TryRun("go");
 				if (stairRotor.Torque != 300000000) stairRotor.Torque = 300000000;
+
+				foreach (IMyLandingGear gear in landingGears) gear.Unlock();
+
 				status["landed"] = false;
 			}
+		}
+
+		void Landing()
+		{
+			status["landing"] = !status["landing"];
 		}
 
 		void Align()
@@ -208,7 +240,7 @@ namespace IngameScript
 
 		void CheckLand(int alt, bool grav)
 		{
-			if (grav)
+			if (grav && status["landing"])
 			{
 				if (alt < 30)
 				{
@@ -222,7 +254,6 @@ namespace IngameScript
 				}
 				else if (status["locked"]) LockGear(false);
 			}
-
 			else
 			{
 				if (status["gearDown"]) GearDown(false);
@@ -235,7 +266,7 @@ namespace IngameScript
 					if (gear.IsLocked)
 					{
 						flight.TryRun("all_off");
-						if (grav)
+						if (grav && status["landing"])
 						{
 							stairRotor.Torque = 0;
 							if (status["aligner"]) aligner.TryRun("stop");
@@ -336,7 +367,7 @@ namespace IngameScript
 				para = parachute;
 				return false;
 			}
-			
+
 
 			return false;
 		}

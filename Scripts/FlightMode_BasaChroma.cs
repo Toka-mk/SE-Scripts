@@ -43,7 +43,7 @@ namespace IngameScript
 		{
 			config = new Dictionary<string, string>
 			{
-				{"Tag", "Thruster"},
+				{"Tag", "[Chroma]"},
 				{"LCD Tag", "Flight Mode"},
 				{"Controller Tag", "Flight"},
 			};
@@ -133,8 +133,8 @@ namespace IngameScript
 
 
 			Echo(statusstring);
-
 			//Echo(Storage);
+			//Echo("Execution Time: " + Runtime.LastRunTimeMs.ToString() + "ms");
 
 			foreach (IMyTextSurface LCD in LCDs) LCD.WriteText(message);
 		}

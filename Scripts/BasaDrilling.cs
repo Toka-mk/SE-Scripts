@@ -131,7 +131,8 @@ namespace IngameScript
 			Drilling();
 
 			Echo(message);
-
+			Echo("\nExecution Time: " + Runtime.LastRunTimeMs.ToString() + "ms");
+			
 			IMyTextSurface surface = seat.GetSurface(2);
 			surface.FontColor = status["deployed"] ? Color.DodgerBlue : Color.Yellow;
 			surface.WriteText(message);

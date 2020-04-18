@@ -119,6 +119,7 @@ namespace IngameScript
 
 		public void Main(string arg, UpdateType updateSource)
 		{
+
 			if (_commandLine.TryParse(arg))
 			{
 				Action commandAction;
@@ -135,20 +136,8 @@ namespace IngameScript
 				return;
 			}
 
-			/*
-			message = "1. Landing Gear\n" +
-						"2. Cruise Mode\n" +
-						"3. All Thrust\n" +
-						"4. Align\n" +
-						"1. Grav Mode\n" +
-						"2. Aux Thrust\n" +
-						"3. Hydro Thrust\n" +
-						"4. Atmo Thrust\n\n";
-
-			foreach (var keyValue in status) message += keyValue.Key + keyValue.Value + "\n";
-			*/
-
 			Echo(message);
+			Echo("\nExecution Time: " + Runtime.LastRunTimeMs.ToString() + "ms");
 
 			int alt = GetAltitude();
 			bool grav = CheckGrav();

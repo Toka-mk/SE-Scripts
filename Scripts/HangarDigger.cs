@@ -1,4 +1,4 @@
-﻿using Sandbox.Game.EntityComponents;
+using Sandbox.Game.EntityComponents;
 using Sandbox.ModAPI.Ingame;
 using Sandbox.ModAPI.Interfaces;
 using SpaceEngineers.Game.ModAPI.Ingame;
@@ -23,6 +23,8 @@ namespace IngameScript
 	{
 		//from here
 
+		float speed = .5f;
+
 		MyCommandLine _commandLine = new MyCommandLine();
 		Dictionary<string, Action> _commands = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase);
 
@@ -38,8 +40,6 @@ namespace IngameScript
 		IMyTimerBlock lockB;
 		IMyProjector projector;
 		IMyShipWelder welder;
-		IMyCargoContainer cargo;
-		IMyConveyorSorter drillSorter;
 		IMyPistonBase pistonB;
 		IMyPistonBase pistonT;
 
@@ -58,14 +58,10 @@ namespace IngameScript
 		bool inner;
 		float rotorVO;
 		float rotorVI;
-		float speed;
 
-		bool pause;
-		List<MyInventoryItem> items = new List<MyInventoryItem>();
 		Dictionary<string, string> config;
-		Dictionary<string, int> status;
+		Dictionary<string, bool> status;
 		string message;
-		string error = "";
 
 		float pi = (float)Math.PI;
 
@@ -76,25 +72,23 @@ namespace IngameScript
 			config = new Dictionary<string, string>
 			{
 				{"Tag", "[Digger]"},
-				{"Target Depth", "90"},
-				{"Speed", ".5"},
-				{"Cargo Name", "[Digger] Cargo"}
+				{"Depth", "30"}
 			};
 
-			status = new Dictionary<string, int>
+			status = new Dictionary<string, bool>
 			{
-				{"stage", 1},
-				{"rStage", 1},
-				{"lStage", 0},
-				{"depth", 0},
-				{"pause", 0}
+				{"pause", false},
+				{"digging", false}
 			};
+
+			depth = 0;
+			//level = 0;
+			rotorVI = 60 * speed / 2 / pi / 18;
+			rotorVO = 60 * speed / 2 / pi / 38;
 
 			_commands["start"] = Start;
-			_commands["pause"] = Pause;
 			_commands["reset"] = Reset;
-			_commands["refresh"] = GetBlocks;
-
+			
 			GetBlocks();
 
 			string[] savedStatus = Storage.Split('\n');
@@ -104,35 +98,24 @@ namespace IngameScript
 				{
 					string[] words = line.Split('=');
 					if (words.Length != 2) continue;
-					string key = words[0];
-					if (status.ContainsKey(key))
-					{
-						int value;
-						Int32.TryParse(words[1], out value);
-						status[key] = value;
-					}
+					string key = words[0].Trim();
+					bool value = words[1].Trim() == "True" ? true : false;
+					if (status.ContainsKey(key)) status[key] = value;
+					else if (key == "Stage") Int32.TryParse(words[1], out stage);
+					else if (key == "Depth") Int32.TryParse(words[1], out targetDepth);
 				}
-
-				stage = status["stage"];
-				lStage = status["lStage"];
-				rStage = status["rStage"];
-				depth = status["depth"];
-				pause = status["pause"] == 1;
 			}
 		}
 
 		public void Save()
 		{
-			status["stage"] = stage;
-			status["lStage"] = lStage;
-			status["rStage"] = rStage;
-			status["depth"] = depth;
-			status["pause"] = pause ? 1 : 0;
 			string savedStatus = "";
 			foreach (var keyValue in status)
 			{
 				savedStatus += keyValue.Key + "=" + keyValue.Value + "\n";
 			}
+			savedStatus += "Stage" + "=" + stage;
+			savedStatus += "Depth" + "=" + depth;
 			Storage = savedStatus;
 		}
 
@@ -153,58 +136,36 @@ namespace IngameScript
 			}
 
 			message = "Stage: " + stage + "\n";
-			message += "Current Depth: " + depth + "\n" + "Target Depth: " + targetDepth + "\n";
-			//foreach (var keyValue in status) message += keyValue.Key + ": " + keyValue.Value + "\n";
+			message += "rStage: " + rStage + "\n";
+			foreach (var keyValue in status) message += keyValue.Key + ": " + keyValue.Value + "\n";
 
 			Dig();
 			NewLevel();
-			Cargo();
 
 			message += "\nExecution Time: " + Runtime.LastRunTimeMs.ToString() + "ms";
-			LCD.WriteText(error + message);
+			LCD.WriteText(message);
 
-		}
-
-		void Pause()
-		{
-			foreach (IMyShipDrill drill in drills) drill.Enabled = false;
-			foreach (IMyPistonBase piston in pistonsX) piston.Enabled = false;
-			foreach (IMyPistonBase piston in pistonsY) piston.Enabled = false;
-			foreach (IMyPistonBase piston in pistonsZ) piston.Enabled = false;
-			drillRotor.Enabled = false;
-			projector.Enabled = false;
-			welder.Enabled = false;
-			pause = true;
 		}
 
 		void Start()
 		{
-			error = "";
-			if (pause)
-			{
-				pause = false;
-			}
-			else
-			{
-				stage = 1;
-				rStage = 1;
-				lStage = 0;
-				if (mergeB.CubeGrid == mergeT.CubeGrid) unlockB.Trigger();
-				GetConfig(Me);
-			}
-
-			foreach (IMyShipDrill drill in drills) drill.Enabled = true;
-			foreach (IMyPistonBase piston in pistonsX) piston.Enabled = true;
-			foreach (IMyPistonBase piston in pistonsY) piston.Enabled = true;
-			foreach (IMyPistonBase piston in pistonsZ) piston.Enabled = true;
-			drillRotor.Enabled = false;
+			stage = 1;
+			rStage = 1;
+			lStage = 0;
 			projector.Enabled = true;
 			welder.Enabled = true;
+			unlockB.Trigger();
+			GetConfig(Me);
 		}
 
 		void Reset()
 		{
 			foreach (IMyPistonBase piston in pistonsX) piston.Velocity = -2f;
+			foreach (IMyPistonBase piston in pistonsZ)
+			{
+				piston.MaxLimit = 2.35f;
+				piston.Velocity = -2;
+			}
 			foreach (IMyPistonBase piston in pistonsY) piston.Velocity = piston.CustomName.Contains("Inv") ? 1 : -1;
 			foreach (IMyShipDrill drill in drills) drill.Enabled = false;
 			drillRotor.RotorLock = true;
@@ -212,45 +173,11 @@ namespace IngameScript
 			drillRotor.TargetVelocityRPM = -2;
 			rotorLock.StartCountdown();
 			stage = 0;
-			rStage = 0;
-			lStage = 0;
-		}
-
-		void Cargo()
-		{
-			IMyInventory inv = cargo.GetInventory();
-
-			if (((float)inv.CurrentVolume / (float)inv.MaxVolume) > 0.8)
-			{
-				drillSorter.Enabled = false;
-				return;
-			}
-
-			items.Clear();
-			inv.GetItems(items);
-			int count = 0;
-
-			foreach (var item in items)
-			{
-				string name = item.Type.ToString();
-
-				if (name.Contains("Ingot/Iron") || name.Contains("Ingot/Silicon") || name.Contains("Ingot/Nickel"))
-				{
-					count++;
-					if (item.Amount < 1000)
-					{
-						drillSorter.Enabled = true;
-						return;
-					}
-				}
-			}
-
-			if (count < 3) drillSorter.Enabled = true;
 		}
 
 		void Dig()
 		{
-			if (stage < 1 || depth >= targetDepth || pause) return;
+			if (stage < 1 || depth > targetDepth || status["pause"]) return;
 
 			switch (stage)
 			{
@@ -294,7 +221,6 @@ namespace IngameScript
 					inner = false;
 					stage = 1;
 					depth += 3;
-					if (depth >= targetDepth) Pause();
 					break;
 
 			}
@@ -326,7 +252,7 @@ namespace IngameScript
 
 		void NewLevel()
 		{
-			if (lStage < 1 || pause) return;
+			if (lStage < 1 || status["pause"]) return;
 
 			switch (lStage)
 			{
@@ -340,12 +266,6 @@ namespace IngameScript
 				
 				case 2:
 					if (pistonB.CurrentPosition != pistonB.MaxLimit) return;
-					if (mergeB.CubeGrid != mergeT.CubeGrid)
-					{
-						error = "ERROR:\nMERGE BLOCK NOT CONNECTED\n";
-						//Pause();
-						return;
-					}
 					//level++;
 					//mergeR = GridTerminalSystem.GetBlockWithName("[Digger] Rail Merge Block") as IMyShipMergeBlock;
 					//mergeR.CustomName += " " + level;
@@ -362,12 +282,6 @@ namespace IngameScript
 
 				case 4:
 					if (pistonT.CurrentPosition != pistonT.MaxLimit) return;
-					if (mergeB.CubeGrid != mergeT.CubeGrid)
-					{
-						error = "ERROR:\nMERGE BLOCK NOT CONNECTED\n";
-						//Pause();
-						return;
-					}
 					unlockB.StartCountdown();
 					projector.Enabled = true;
 					welder.Enabled = true;
@@ -410,17 +324,13 @@ namespace IngameScript
 		bool PistonMoving(IMyPistonBase piston)
 		{
 			if (piston.Velocity == 0) return false;
-			//message += piston.CustomName + piston.CurrentPosition + (piston.Velocity > 0 ? piston.MaxLimit : piston.MinLimit) + "\n";
+			message += piston.CustomName + piston.CurrentPosition + (piston.Velocity > 0 ? piston.MaxLimit : piston.MinLimit) + "\n";
 			return piston.CurrentPosition != (piston.Velocity > 0 ? piston.MaxLimit : piston.MinLimit);
 		}
 
-		public void GetBlocks()
+		void GetBlocks()
 		{
 			GetConfig(Me);
-			drills.Clear();
-			pistonsX.Clear();
-			pistonsY.Clear();
-			pistonsZ.Clear();
 
 			IMyBlockGroup group = GridTerminalSystem.GetBlockGroupWithName("[Digger] Drills");
 			group.GetBlocksOfType(drills);
@@ -434,17 +344,13 @@ namespace IngameScript
 			group = GridTerminalSystem.GetBlockGroupWithName("[Digger] Pistons Z");
 			group.GetBlocksOfType(pistonsZ);
 
-			cargo = GridTerminalSystem.GetBlockWithName(config["Cargo Name"]) as IMyCargoContainer;
-			drillSorter = GridTerminalSystem.GetBlockWithName("[Digger] Drill Sorter") as IMyConveyorSorter;
-
 			drillRotor = GridTerminalSystem.GetBlockWithName("[Digger] Drill Rotor") as IMyMotorStator;
 			rotorLock = GridTerminalSystem.GetBlockWithName("[Digger] Rotor Lock Timer") as IMyTimerBlock;
 			unlockB = GridTerminalSystem.GetBlockWithName("[Digger] Platform B Unlock Timer") as IMyTimerBlock;
 			lockB = GridTerminalSystem.GetBlockWithName("[Digger] Platform B Lock Timer") as IMyTimerBlock;
 			unlockT = GridTerminalSystem.GetBlockWithName("[Digger] Platform T Unlock Timer") as IMyTimerBlock;
 			lockT = GridTerminalSystem.GetBlockWithName("[Digger] Platform T Lock Timer") as IMyTimerBlock;
-			//LCD = GridTerminalSystem.GetBlockWithName("[Digger] Debug LCD") as IMyTextSurface;
-			LCD = Me.GetSurface(0) as IMyTextSurface;
+			LCD = GridTerminalSystem.GetBlockWithName("[Digger] Debug LCD") as IMyTextSurface;
 			projector = GridTerminalSystem.GetBlockWithName("[Digger] Rail Projector") as IMyProjector;
 			welder = GridTerminalSystem.GetBlockWithName("[Digger] Platform Welder") as IMyShipWelder;
 			mergeT = GridTerminalSystem.GetBlockWithName("[Digger] Platform Merge Block T") as IMyShipMergeBlock;
@@ -476,10 +382,7 @@ namespace IngameScript
 				}
 
 				config["Tag"] += " ";
-				Int32.TryParse(config["Target Depth"], out targetDepth);
-				speed = (float)Convert.ToDouble(config["Speed"]);
-				rotorVI = 60 * speed / 2 / pi / (float)((drills.Count() -1) * 2.5);
-				rotorVO = 60 * speed / 2 / pi / (float)((drills.Count() * 2 - 1) * 2.5);
+				Int32.TryParse(config["Depth"], out targetDepth);
 			}
 			else SetConfig(block);
 		}
